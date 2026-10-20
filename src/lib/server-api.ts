@@ -286,19 +286,13 @@ export async function fetchYouTubeLiveFeed(forceRefresh = false): Promise<YouTub
   }
 }
 
-async function syncLiveRazorpaySupporters(
-  overrideKeyId?: string,
-  overrideKeySecret?: string,
-): Promise<{
+async function syncLiveRazorpaySupporters(): Promise<{
   supporters: SupporterEntry[];
   syncedLive: boolean;
   error?: string;
 }> {
-  const keyId =
-    overrideKeyId?.trim() ||
-    (await resolveEnvVar("RAZORPAY_KEY_ID")) ||
-    (await resolveEnvVar("VITE_RAZORPAY_KEY_ID"));
-  const keySecret = overrideKeySecret?.trim() || (await resolveEnvVar("RAZORPAY_KEY_SECRET"));
+  const keyId = await resolveEnvVar("RAZORPAY_KEY_ID");
+  const keySecret = await resolveEnvVar("RAZORPAY_KEY_SECRET");
 
   if (!keyId || !keySecret) {
     return {
@@ -421,59 +415,10 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
     return jsonResponse(feed);
   }
 
-  if (url.pathname === "/api/creator-photo" && request.method === "GET") {
-    return jsonResponse({
-      photoUrl: customCreatorPhotoDataUrl || "/creator-photo.svg",
-      isCustom: Boolean(customCreatorPhotoDataUrl),
-    });
-  }
-
-  if (url.pathname === "/api/creator-photo" && request.method === "POST") {
-    try {
-      const body = (await request.json()) as { dataUrl?: string };
-      if (!body.dataUrl || !body.dataUrl.startsWith("data:image/")) {
-        return jsonResponse({ error: "Invalid image format." }, 400);
-      }
-      customCreatorPhotoDataUrl = body.dataUrl;
-      return jsonResponse({ ok: true, photoUrl: customCreatorPhotoDataUrl });
-    } catch {
-      return jsonResponse({ error: "Failed to save creator photo." }, 500);
-    }
-  }
-
-  if (url.pathname === "/api/razorpay/config" && request.method === "POST") {
-    try {
-      const body = (await request.json()) as { keyId?: string; keySecret?: string };
-      if (body.keyId !== undefined) {
-        runtimeRazorpayKeyId = body.keyId.trim();
-        process.env["RAZORPAY_KEY_ID"] = runtimeRazorpayKeyId;
-      }
-      if (body.keySecret !== undefined) {
-        runtimeRazorpayKeySecret = body.keySecret.trim();
-        process.env["RAZORPAY_KEY_SECRET"] = runtimeRazorpayKeySecret;
-      }
-      const syncResult = await syncLiveRazorpaySupporters(
-        runtimeRazorpayKeyId,
-        runtimeRazorpayKeySecret,
-      );
-      return jsonResponse({
-        ok: true,
-        hasServerKey: Boolean(runtimeRazorpayKeyId),
-        hasServerSecret: Boolean(runtimeRazorpayKeySecret),
-        syncedLive: syncResult.syncedLive,
-        supporters: syncResult.supporters,
-        ...(syncResult.error ? { syncError: syncResult.error } : {}),
-      });
-    } catch {
-      return jsonResponse({ error: "Failed to update Razorpay credentials." }, 500);
-    }
-  }
-
   if (url.pathname === "/api/razorpay/supporters" && request.method === "GET") {
-    const configuredKeyId =
-      (await resolveEnvVar("RAZORPAY_KEY_ID")) || (await resolveEnvVar("VITE_RAZORPAY_KEY_ID"));
+    const configuredKeyId = await resolveEnvVar("RAZORPAY_KEY_ID");
     const configuredSecret = await resolveEnvVar("RAZORPAY_KEY_SECRET");
-    const syncResult = await syncLiveRazorpaySupporters(configuredKeyId, configuredSecret);
+    const syncResult = await syncLiveRazorpaySupporters();
 
     return jsonResponse({
       supporters: syncResult.supporters,
@@ -481,7 +426,6 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
       lastSyncedAt: new Date().toISOString(),
       hasServerKey: Boolean(configuredKeyId),
       hasServerSecret: Boolean(configuredSecret),
-      keyId: configuredKeyId || null,
       ...(syncResult.error ? { syncError: syncResult.error } : {}),
     });
   }
@@ -495,8 +439,6 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
         gameTag?: string;
         email?: string;
         message?: string;
-        clientKeyId?: string;
-        clientKeySecret?: string;
       };
 
       const rawAmount = Number(body.amount ?? 0);
@@ -507,21 +449,10 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
         );
       }
 
-      if (body.clientKeyId?.trim()) {
-        runtimeRazorpayKeyId = body.clientKeyId.trim();
-      }
-      if (body.clientKeySecret?.trim()) {
-        runtimeRazorpayKeySecret = body.clientKeySecret.trim();
-      }
-
       const amountInPaise = Math.round(rawAmount * 100);
       const currency = (body.currency || "INR").toUpperCase();
-      const keyId =
-        body.clientKeyId?.trim() ||
-        (await resolveEnvVar("RAZORPAY_KEY_ID")) ||
-        (await resolveEnvVar("VITE_RAZORPAY_KEY_ID"));
-      const keySecret =
-        body.clientKeySecret?.trim() || (await resolveEnvVar("RAZORPAY_KEY_SECRET"));
+      const keyId = await resolveEnvVar("RAZORPAY_KEY_ID");
+      const keySecret = await resolveEnvVar("RAZORPAY_KEY_SECRET");
       const receipt = `ag2k_${Date.now()}`;
 
       // Create a live Razorpay Order when both Key ID and Key Secret are configured

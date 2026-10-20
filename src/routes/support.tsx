@@ -6,7 +6,6 @@ import {
   Heart,
   Menu,
   RefreshCw,
-  Settings2,
   Sparkles,
   X,
   Youtube,
@@ -252,11 +251,6 @@ function SupportPage() {
   const [syncedLiveApi, setSyncedLiveApi] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
-  const [merchantKeyId, setMerchantKeyId] = useState("");
-  const [merchantKeySecret, setMerchantKeySecret] = useState("");
-  const [showKeyConfig, setShowKeyConfig] = useState(false);
-  const [savingConfig, setSavingConfig] = useState(false);
-
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [completedReceipt, setCompletedReceipt] = useState<SupporterEntry | null>(null);
@@ -273,7 +267,6 @@ function SupportPage() {
           supporters?: SupporterEntry[];
           syncedLive?: boolean;
           lastSyncedAt?: string;
-          keyId?: string | null;
         };
         if (Array.isArray(data.supporters)) {
           setSupporters(data.supporters);
@@ -281,9 +274,6 @@ function SupportPage() {
         setSyncedLiveApi(Boolean(data.syncedLive));
         if (data.lastSyncedAt) {
           setLastSyncedAt(data.lastSyncedAt);
-        }
-        if (data.keyId) {
-          setMerchantKeyId((prev) => prev || data.keyId || "");
         }
       }
     } catch {
@@ -295,12 +285,6 @@ function SupportPage() {
 
   useEffect(() => {
     void loadRazorpayScript();
-    try {
-      const savedKey = localStorage.getItem("ag2k_razorpay_key_id");
-      if (savedKey) setMerchantKeyId(savedKey);
-    } catch {
-      // ignore storage errors
-    }
     void syncSupportersWall();
 
     const interval = setInterval(() => {
@@ -308,42 +292,6 @@ function SupportPage() {
     }, 30_000);
     return () => clearInterval(interval);
   }, [syncSupportersWall]);
-
-  const handleSaveRazorpayCredentials = async () => {
-    setSavingConfig(true);
-    setErrorMsg(null);
-    try {
-      localStorage.setItem("ag2k_razorpay_key_id", merchantKeyId.trim());
-    } catch {
-      // ignore
-    }
-    try {
-      const res = await fetch("/api/razorpay/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          keyId: merchantKeyId.trim(),
-          keySecret: merchantKeySecret.trim() || undefined,
-        }),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as {
-          supporters?: SupporterEntry[];
-          syncedLive?: boolean;
-        };
-        if (Array.isArray(data.supporters)) {
-          setSupporters(data.supporters);
-        }
-        setSyncedLiveApi(Boolean(data.syncedLive));
-        setLastSyncedAt(new Date().toISOString());
-        setShowKeyConfig(false);
-      }
-    } catch {
-      setErrorMsg("Could not save Razorpay API credentials.");
-    } finally {
-      setSavingConfig(false);
-    }
-  };
 
   const handlePayWithRazorpay = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -369,10 +317,6 @@ function SupportPage() {
     setSubmitting(true);
 
     try {
-      const envKeyId =
-        (import.meta.env["VITE_RAZORPAY_KEY_ID"] as string | undefined)?.trim() ||
-        merchantKeyId.trim();
-
       const res = await fetch("/api/razorpay/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -383,8 +327,6 @@ function SupportPage() {
           gameTag: gameTag.trim(),
           email: trimmedEmail,
           message: message.trim(),
-          clientKeyId: envKeyId || undefined,
-          clientKeySecret: merchantKeySecret.trim() || undefined,
         }),
       });
 
@@ -402,11 +344,9 @@ function SupportPage() {
         return;
       }
 
-      const activeKeyId = orderData.keyId || envKeyId;
-      if (!activeKeyId) {
-        setShowKeyConfig(true);
+      if (!orderData.keyId) {
         setErrorMsg(
-          "Please enter your Razorpay Key ID (rzp_live_... or rzp_test_...) below to launch Razorpay Checkout.",
+          "Razorpay gateway is not configured on the server yet. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.",
         );
         setSubmitting(false);
         return;
@@ -420,7 +360,7 @@ function SupportPage() {
       }
 
       const options: Record<string, unknown> = {
-        key: activeKeyId,
+        key: orderData.keyId,
         amount: orderData.amount,
         currency: orderData.currency || "INR",
         name: "AG2K_TAMILAN",
@@ -551,7 +491,10 @@ function SupportPage() {
               <div className="text-right">
                 <span className="text-xs text-muted-foreground">Amount</span>
                 <p className="font-display text-2xl font-black text-secondary tabular-nums">
-                  ₹{Number.isFinite(numericAmount) && numericAmount > 0 ? numericAmount.toLocaleString("en-IN") : 0}
+                  ₹
+                  {Number.isFinite(numericAmount) && numericAmount > 0
+                    ? numericAmount.toLocaleString("en-IN")
+                    : 0}
                 </p>
               </div>
             </div>
@@ -679,58 +622,6 @@ function SupportPage() {
                   ? "Opening Razorpay..."
                   : `Pay ₹${Number.isFinite(numericAmount) && numericAmount > 0 ? numericAmount.toLocaleString("en-IN") : 0} with Razorpay`}
               </button>
-
-              {/* Razorpay Live Key & Secret Sync Configuration */}
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowKeyConfig(!showKeyConfig)}
-                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                  {merchantKeyId
-                    ? "Razorpay API Credentials Connected (Configure)"
-                    : "Connect Razorpay API Keys for Checkout & Live Wall Sync"}
-                </button>
-
-                {showKeyConfig && (
-                  <div className="mt-3 space-y-3 rounded-2xl border border-border bg-background/60 p-4 text-xs">
-                    <p className="font-semibold text-foreground">
-                      Razorpay API Credentials (Live Sync)
-                    </p>
-                    <p className="text-muted-foreground">
-                      Provide your <code className="text-secondary">RAZORPAY_KEY_ID</code> and{" "}
-                      <code className="text-secondary">RAZORPAY_KEY_SECRET</code> to launch
-                      Razorpay Checkout and sync real-time captured payments into the AG Soldiers
-                      Supporter Wall.
-                    </p>
-                    <div className="space-y-2">
-                      <input
-                        type="text"
-                        placeholder="Key ID (rzp_live_... or rzp_test_...)"
-                        value={merchantKeyId}
-                        onChange={(e) => setMerchantKeyId(e.target.value)}
-                        className="w-full rounded-xl border border-input bg-muted/50 px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
-                      />
-                      <input
-                        type="password"
-                        placeholder="Key Secret (optional, enables live /v1/payments wall sync)"
-                        value={merchantKeySecret}
-                        onChange={(e) => setMerchantKeySecret(e.target.value)}
-                        className="w-full rounded-xl border border-input bg-muted/50 px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
-                      />
-                      <button
-                        type="button"
-                        disabled={savingConfig}
-                        onClick={() => void handleSaveRazorpayCredentials()}
-                        className="rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
-                      >
-                        {savingConfig ? "Syncing with Razorpay..." : "Save & Sync Razorpay"}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
             </form>
           </div>
         </section>
@@ -781,8 +672,7 @@ function SupportPage() {
             <div className="glass rounded-3xl p-10 text-center">
               <p className="font-display text-lg font-bold">No Razorpay supporters recorded yet</p>
               <p className="mx-auto mt-2 max-w-md text-xs text-muted-foreground">
-                Complete a payment above with Razorpay (or connect your Razorpay API credentials)
-                and verified payments will sync here automatically in real time.
+                Verified Razorpay payments automatically sync and appear here in real time.
               </p>
             </div>
           ) : (
