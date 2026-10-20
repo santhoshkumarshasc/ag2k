@@ -345,9 +345,7 @@ function SupportPage() {
       }
 
       if (!orderData.keyId) {
-        setErrorMsg(
-          "Razorpay gateway is not configured on the server yet. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.",
-        );
+        setErrorMsg("Razorpay checkout is currently unavailable. Please try again shortly.");
         setSubmitting(false);
         return;
       }

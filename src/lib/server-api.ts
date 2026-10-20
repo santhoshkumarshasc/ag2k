@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   CHANNEL_ID,
   DEFAULT_STATS,
@@ -13,41 +15,28 @@ let cachedYouTubeFeed: { data: YouTubeFeedResponse; expiresAt: number } | null =
 const CACHE_TTL_MS = 60_000;
 
 const supportersStore: SupporterEntry[] = [];
-let runtimeRazorpayKeyId = "";
-let runtimeRazorpayKeySecret = "";
-let customCreatorPhotoDataUrl: string | null = null;
 
 function getEnvVar(key: string): string {
   if (typeof process !== "undefined" && process.env && process.env[key]) {
-    return process.env[key] as string;
+    return (process.env[key] as string).trim();
   }
-  return "";
-}
-
-async function resolveEnvVar(key: string): Promise<string> {
-  if (key === "RAZORPAY_KEY_ID" && runtimeRazorpayKeyId) return runtimeRazorpayKeyId;
-  if (key === "RAZORPAY_KEY_SECRET" && runtimeRazorpayKeySecret) return runtimeRazorpayKeySecret;
-
-  const fromProc = getEnvVar(key);
-  if (fromProc) return fromProc.trim();
   try {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const envContent = await fs.readFile(path.join(process.cwd(), ".env"), "utf8");
-    for (const line of envContent.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eqIdx = trimmed.indexOf("=");
-      if (eqIdx === -1) continue;
-      const k = trimmed.slice(0, eqIdx).trim();
-      const v = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
-      if (k === key && v) {
-        process.env[key] = v;
-        return v;
+    const envPath = path.resolve(process.cwd(), ".env");
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, "utf-8");
+      for (const line of content.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx === -1) continue;
+        const k = trimmed.slice(0, eqIdx).trim();
+        if (k === key) {
+          return trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+        }
       }
     }
   } catch {
-    // Ignore if .env does not exist or fs is unavailable
+    // ignore fs read errors
   }
   return "";
 }
@@ -77,8 +66,8 @@ export async function fetchYouTubeLiveFeed(forceRefresh = false): Promise<YouTub
     return cachedYouTubeFeed.data;
   }
 
-  const apiKey = await resolveEnvVar("YOUTUBE_API_KEY");
-  const channelId = (await resolveEnvVar("YOUTUBE_CHANNEL_ID")) || CHANNEL_ID;
+  const apiKey = getEnvVar("YOUTUBE_API_KEY");
+  const channelId = getEnvVar("YOUTUBE_CHANNEL_ID") || CHANNEL_ID;
 
   if (!apiKey) {
     return {
@@ -123,7 +112,9 @@ export async function fetchYouTubeLiveFeed(forceRefresh = false): Promise<YouTub
       channelItem?.contentDetails?.relatedPlaylists?.uploads || UPLOADS_PLAYLIST_ID;
 
     const stats: ChannelStats = {
-      subscriberCount: Number(channelItem?.statistics?.subscriberCount ?? DEFAULT_STATS.subscriberCount),
+      subscriberCount: Number(
+        channelItem?.statistics?.subscriberCount ?? DEFAULT_STATS.subscriberCount,
+      ),
       viewCount: Number(channelItem?.statistics?.viewCount ?? DEFAULT_STATS.viewCount),
       videoCount: Number(channelItem?.statistics?.videoCount ?? DEFAULT_STATS.videoCount),
       title: channelItem?.snippet?.title || DEFAULT_STATS.title,
@@ -211,10 +202,14 @@ export async function fetchYouTubeLiveFeed(forceRefresh = false): Promise<YouTub
         for (const v of videosJson.items ?? []) {
           if (!v.id) continue;
           const { formatted, totalSeconds } = parseIsoDuration(v.contentDetails?.duration);
-          const views = v.statistics?.viewCount !== undefined ? Number(v.statistics.viewCount) : undefined;
-          const likes = v.statistics?.likeCount !== undefined ? Number(v.statistics.likeCount) : undefined;
+          const views =
+            v.statistics?.viewCount !== undefined ? Number(v.statistics.viewCount) : undefined;
+          const likes =
+            v.statistics?.likeCount !== undefined ? Number(v.statistics.likeCount) : undefined;
           const comments =
-            v.statistics?.commentCount !== undefined ? Number(v.statistics.commentCount) : undefined;
+            v.statistics?.commentCount !== undefined
+              ? Number(v.statistics.commentCount)
+              : undefined;
           detailsMap.set(v.id, {
             ...(views !== undefined ? { views } : {}),
             ...(likes !== undefined ? { likes } : {}),
@@ -233,13 +228,18 @@ export async function fetchYouTubeLiveFeed(forceRefresh = false): Promise<YouTub
         if (!id) return null;
         const title = item.snippet?.title || "Untitled Video";
         const description = item.snippet?.description || "";
-        const date = item.contentDetails?.videoPublishedAt || item.snippet?.publishedAt || new Date().toISOString();
+        const date =
+          item.contentDetails?.videoPublishedAt ||
+          item.snippet?.publishedAt ||
+          new Date().toISOString();
         const details = detailsMap.get(id);
         const lowerText = `${title} ${description}`.toLowerCase();
         const isShort =
           lowerText.includes("#shorts") ||
           lowerText.includes("#short") ||
-          (details?.totalSeconds !== undefined && details.totalSeconds > 0 && details.totalSeconds <= 65);
+          (details?.totalSeconds !== undefined &&
+            details.totalSeconds > 0 &&
+            details.totalSeconds <= 65);
         const isLiveStream = Boolean(details?.isLiveStream) || /\blive\b/i.test(title);
         const thumbnail =
           item.snippet?.thumbnails?.maxres?.url ||
@@ -289,10 +289,9 @@ export async function fetchYouTubeLiveFeed(forceRefresh = false): Promise<YouTub
 async function syncLiveRazorpaySupporters(): Promise<{
   supporters: SupporterEntry[];
   syncedLive: boolean;
-  error?: string;
 }> {
-  const keyId = await resolveEnvVar("RAZORPAY_KEY_ID");
-  const keySecret = await resolveEnvVar("RAZORPAY_KEY_SECRET");
+  const keyId = getEnvVar("RAZORPAY_KEY_ID");
+  const keySecret = getEnvVar("RAZORPAY_KEY_SECRET");
 
   if (!keyId || !keySecret) {
     return {
@@ -315,7 +314,6 @@ async function syncLiveRazorpaySupporters(): Promise<{
       return {
         supporters: supportersStore,
         syncedLive: false,
-        error: `Razorpay API returned HTTP ${res.status}`,
       };
     }
 
@@ -387,11 +385,10 @@ async function syncLiveRazorpaySupporters(): Promise<{
       supporters: supportersStore,
       syncedLive: true,
     };
-  } catch (error) {
+  } catch {
     return {
       supporters: supportersStore,
       syncedLive: false,
-      error: error instanceof Error ? error.message : "Failed to sync with Razorpay API",
     };
   }
 }
@@ -416,17 +413,11 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
   }
 
   if (url.pathname === "/api/razorpay/supporters" && request.method === "GET") {
-    const configuredKeyId = await resolveEnvVar("RAZORPAY_KEY_ID");
-    const configuredSecret = await resolveEnvVar("RAZORPAY_KEY_SECRET");
     const syncResult = await syncLiveRazorpaySupporters();
-
     return jsonResponse({
       supporters: syncResult.supporters,
       syncedLive: syncResult.syncedLive,
       lastSyncedAt: new Date().toISOString(),
-      hasServerKey: Boolean(configuredKeyId),
-      hasServerSecret: Boolean(configuredSecret),
-      ...(syncResult.error ? { syncError: syncResult.error } : {}),
     });
   }
 
@@ -451,11 +442,10 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
 
       const amountInPaise = Math.round(rawAmount * 100);
       const currency = (body.currency || "INR").toUpperCase();
-      const keyId = await resolveEnvVar("RAZORPAY_KEY_ID");
-      const keySecret = await resolveEnvVar("RAZORPAY_KEY_SECRET");
+      const keyId = getEnvVar("RAZORPAY_KEY_ID");
+      const keySecret = getEnvVar("RAZORPAY_KEY_SECRET");
       const receipt = `ag2k_${Date.now()}`;
 
-      // Create a live Razorpay Order when both Key ID and Key Secret are configured
       if (keyId && keySecret) {
         const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
         const rzpRes = await fetch("https://api.razorpay.com/v1/orders", {
@@ -523,7 +513,7 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
         return jsonResponse({ error: "Missing Razorpay payment ID." }, 400);
       }
 
-      const keySecret = await resolveEnvVar("RAZORPAY_KEY_SECRET");
+      const keySecret = getEnvVar("RAZORPAY_KEY_SECRET");
       let signatureVerified = true;
       if (keySecret && body.razorpay_order_id && body.razorpay_signature) {
         const crypto = await import("node:crypto");
@@ -540,9 +530,7 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
       const amountInRupees = Math.max(10, Math.round(Number(body.amount ?? 100)));
       const supporterName = (body.supporterName || "AG Soldier").trim().slice(0, 60);
       const gameTag = (body.gameTag || "").trim().slice(0, 40);
-      const message = (
-        body.message || "Supported AG2K_TAMILAN via Razorpay!"
-      )
+      const message = (body.message || "Supported AG2K_TAMILAN via Razorpay!")
         .trim()
         .slice(0, 280);
 
@@ -566,7 +554,6 @@ export async function handleApiRequest(request: Request): Promise<Response | nul
         supportersStore.unshift(entry);
       }
 
-      // Also trigger a live sync with Razorpay API if credentials are configured
       await syncLiveRazorpaySupporters();
 
       return jsonResponse({
